@@ -358,6 +358,34 @@ void PatchResolution(int width, int height)
 	}
 }
 
+/* Patch in some code to auto-detect the resolution */
+void PatchAutoResolution()
+{
+
+	/* Don't default to 800x600: jnz -> jmp */
+	PatchByte(0xCF9F0, 0xEB);
+
+	uint8_t call_SetScreenSize[] = {
+		0xE8, 0x57, 0x03, 0x00, 0x00, /* call SetScreenSize */
+		0xEB, 0x20 /* jmp loc_4CFA2B */
+	};
+	PatchBytes(0xCFA04, ARRAY_SIZE(call_SetScreenSize), call_SetScreenSize);
+
+	NopBytes(0xCFA0B, 32);
+
+	uint8_t new_SetScreenSize[] = {
+		0x8B, 0x2D, 0xA0, 0xF1, 0x56, 0x00, /* mov ebp, ds:GetSystemMetrics */
+		0x6A, 0x00, /* push SM_CXSCREEN (0) */
+		0xFF, 0xD5, /* call ebp (GetSystemMetrics) */
+		0xA3, 0xB0, 0x8D, 0xE3, 0x00, /* mov ScreenWidth, eax */
+		0x6A, 0x01, /* push SM_CYSCREEN (1) */
+		0xFF, 0xD5, /* call ebp (GetSystemMetrics) */
+		0xA3, 0xAC, 0x8D, 0xE3, 0x00, /* mov ScreenHeight, eax */
+		0xC3 /* ret */
+	};
+	PatchBytes(0xCFD60, ARRAY_SIZE(new_SetScreenSize), new_SetScreenSize);
+}
+
 bool ValidateResolution(int width, int height)
 {
 	bool valid = true;
@@ -408,26 +436,26 @@ bool ValidateResolution(int width, int height)
 
 int main(int argc, char **argv)
 {
-	if (argc < 5)
+	if (argc < 2)
 	{
 		printf("%s: Run Pharaoh+Cleopatra at different resolutions\n", argv[0]);
 		printf("\n");
 		printf("Usage:\n");
-		printf("\t%s [input] [output] [width] [height]\n", argv[0]);
-		printf("\t[input]: the Cleopatra 2.1 .exe file, or extracted EXE_RESOURCE from PharaohResizer\n");
-		printf("\t[output]: The .exe file to write\n");
-		printf("\t[width]: The width of the resolution to use.\n");
-		printf("\t[height]: The height of the resolution to use.\n");
+		printf("\t%s input [output] [width] [height]\n", argv[0]);
+		printf("\tinput: the Cleopatra 2.1 .exe file, or extracted EXE_RESOURCE from PharaohResizer\n");
+		printf("\t[output]: The .exe file to write, defaults to PharaohNew.exe\n");
+		printf("\t[width]: The width of the resolution to use, otherwise autodetected\n");
+		printf("\t[height]: The height of the resolution to use, otherwise autodetected\n");
 		return 1;
 	}
 
 	const char *inName = argv[1];
-	const char *outName = argv[2];
-	int width = atoi(argv[3]);
-	int height = atoi(argv[4]);
+	const char *outName = (argc >= 3)?argv[2]:"PharaohNew.exe";
+	int width = (argc >= 4)?atoi(argv[3]):0;
+	int height = (argc >= 5)?atoi(argv[4]):0;
 
 	/* Validate the resolution before we do anything further. */
-	if (!ValidateResolution(width, height))
+	if ((width || height) && !ValidateResolution(width, height))
 	{
 		/* ValidateResolution prints its own errors. */
 		return 7;
@@ -501,8 +529,16 @@ int main(int argc, char **argv)
 		}
 	}
 
-	/* Patch the user's width and height in. */
-	PatchResolution(width, height);
+	if (width && height)
+	{
+		/* Patch the user's width and height in. */
+		PatchResolution(width, height);
+	}
+	else
+	{
+		/* Write some code to autodetect the resolution. */
+		PatchAutoResolution();
+	}
 
 	if (fwrite(exeFile, EXE_SIZE, 1, outFile) != 1)
 	{
